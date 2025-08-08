@@ -1,41 +1,65 @@
 import streamlit as st
 import openai
-# from dotenv import load_dotenv
-# import os
+from langchain.document_loaders import DirectoryLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.vectorstores import FAISS
+import os
 
-# Load environment variables from .env file
-# load_dotenv()
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    st.error("OPENAI_API_KEY environment variable not set.")
+    st.stop()
 
 
-# Set your OpenAI API key
-# openai.api_key = os.getenv("OPENAI_API_KEY")
+# Load and embed documents (run once or cache)
+@st.cache_resource
+def load_vectorstore(folder_path):
+    loader = DirectoryLoader(folder_path)
+    docs = loader.load()
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+    splits = splitter.split_documents(docs)
+    embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
+    vectorstore = FAISS.from_documents(splits, embeddings)
+    return vectorstore
 
-st.title("Design Specification Generator")
+st.title("Design Specification Generator with RAG")
 
 # Dropdown menus
-series = st.selectbox("Select Altivar Process Series", ["600", "900"])
+series = st.selectbox("Select Altivar Process Series", ["630", "930"])
 application = st.selectbox("Select Application", ["Pumping", "HVAC"])
 format = st.selectbox("Select Specification Format", ["MasterSpec", "NBS Chorus"])
+folder_path = st.text_input("Folder with reference documents", "/workspaces/specsAI/docs")
 
 if st.button("Generate Specification"):
+    vectorstore = load_vectorstore(folder_path)
+    query = f"Altivar {series} for {application} in {format} format"
+    docs = vectorstore.similarity_search(query, k=4)
+    context = "\n\n".join([d.page_content for d in docs])
+    
+    st.text_area("Design Specification Context", context, height=300)
+
+
     prompt = f"""
-    Generate a comprehensive technical design specification for the Altivar {series} variable speed drive (VSD), intended for a {application} application.
-    The output should be structured in a formal {format} format suitable for inclusion in engineering design documentation, with the goal of locking in this drive model for procurement and implementation.
+    Use the following context to generate a comprehensive technical design specification for the Altivar {series} VSD ({application} application) in {format} format.
 
-    The specification must include:
+    Context:
+    {context}
 
-    A brief description of the Altivar {series} series and its relevance to the application
-    Key technical parameters (power range, voltage class, control modes, communication protocols, etc.)
-    Application-specific features or benefits of this drive series
-    Environmental ratings, certifications, and compliance standards (e.g., IEC, UL, CE)
-    Installation requirements and considerations (enclosure type, cooling, space, EMC, wiring)
-    Any options or modules relevant to the application (e.g., braking units, filters, HMI)
-    Ensure the content is specific to the {series} series, technically accurate, and presented in a concise, professional format ready for inclusion in a design package."""
-  
+    Specification requirements:
+    - Brief description of the Altivar {series} series and its relevance
+    - Key technical parameters
+    - Application-specific features
+    - Environmental ratings, certifications, and compliance
+    - Installation requirements
+    - Relevant options or modules
+    - Ensure technical accuracy and concise, professional format.
+    """
+
     st.text_area("Design Specification Prompt", prompt, height=300)
 
     with st.spinner("Generating..."):
-        client = openai.OpenAI(api_key = OPENAI_API_KEY)
+        client = openai.OpenAI(api_key=OPENAI_API_KEY)
         response = client.chat.completions.create(
             model="gpt-4.1-mini",
             messages=[{"role": "user", "content": prompt}]
